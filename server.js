@@ -32,15 +32,35 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '20kb' }));
 
 // Rebuild the Brotli-compressed game page from its repository-friendly text parts.
+let cachedGamePage = null;
+function loadGamePage() {
+  if (cachedGamePage) return cachedGamePage;
+  const partsDir = path.join(__dirname, 'public', 'page-data');
+  const names = fs.readdirSync(partsDir)
+    .filter(name => /^part-\d{2}\.txt$/.test(name))
+    .sort();
+  if (names.length !== 11) throw new Error('Expected 11 packed game-page chunks; found ' + names.length);
+  const encoded = names.map(name => fs.readFileSync(path.join(partsDir, name), 'utf8').trim()).join('');
+  let html = zlib.brotliDecompressSync(Buffer.from(encoded, 'base64')).toString('utf8');
+  const runtimePatches = [["let r=dir==='left'?line:dir==='right'?line:dir==='up'?j:j,c=dir==='left'?j:dir==='right'?3-j:dir==='up'?line:line;ids.push(r*4+c)","let r=dir==='left'?line:dir==='right'?line:dir==='up'?j:3-j,c=dir==='left'?j:dir==='right'?3-j:line;ids.push(r*4+c)"],["window.addEventListener('keydown',key);let touch=null;$('#gameContent').ontouchstart=e=>touch=[e.touches[0].clientX,e.touches[0].clientY];$('#gameContent').ontouchend=e=>{if(!touch)return;","window.addEventListener('keydown',key);$('#backBtn').addEventListener('click',()=>window.removeEventListener('keydown',key),{once:true});let touch=null;$('#gameContent').ontouchstart=e=>{if(current!=='2048')return;touch=[e.touches[0].clientX,e.touches[0].clientY]};$('#gameContent').ontouchend=e=>{if(current!=='2048'||!touch){touch=null;return;}"],["score=0,run=false;function draw(){ctx.clearRect(0,0,400,400);","score=0,run=false,started=false,gameOver=false;function draw(){ctx.clearRect(0,0,400,400);"],["function tick(){dir=next;let h={x:s[0].x+dir.x,y:s[0].y+dir.y};if(h.x<0||h.x>=20||h.y<0||h.y>=20||s.some(p=>p.x===h.x&&p.y===h.y)){stopSnake();run=false;$('#snakeStatus').textContent='Игра окончена. Очки: '+score;record('snake',score);$('#snakeBest').textContent=stats.snake||score;return}s.unshift(h);if(h.x===food.x&&h.y===food.y){score+=10;$('#snakeScore').textContent=score;food={x:Math.floor(Math.random()*20),y:Math.floor(Math.random()*20)};while(s.some(p=>p.x===food.x&&p.y===food.y))food={x:Math.floor(Math.random()*20),y:Math.floor(Math.random()*20)}}else s.pop();draw()}","function tick(){dir=next;let h={x:s[0].x+dir.x,y:s[0].y+dir.y},ate=h.x===food.x&&h.y===food.y;if(h.x<0||h.x>=20||h.y<0||h.y>=20||s.some((p,i)=>(ate||i<s.length-1)&&p.x===h.x&&p.y===h.y)){stopSnake();run=false;gameOver=true;$('#snakeStatus').textContent='Игра окончена. Очки: '+score;record('snake',score);$('#snakeBest').textContent=stats.snake||score;return}s.unshift(h);if(ate){score+=10;$('#snakeScore').textContent=score;if(s.length===400){stopSnake();run=false;gameOver=true;$('#snakeStatus').textContent='Идеально! Ты заполнил всё поле. Очки: '+score;record('snake',score);$('#snakeBest').textContent=stats.snake||score;draw();return}do{food={x:Math.floor(Math.random()*20),y:Math.floor(Math.random()*20)}}while(s.some(p=>p.x===food.x&&p.y===food.y))}else s.pop();draw()}"],["function start(){stopSnake();s=[{x:8,y:8},{x:7,y:8},{x:6,y:8}];dir=next={x:1,y:0};score=0;$('#snakeScore').textContent='0';run=true;","function start(){stopSnake();s=[{x:8,y:8},{x:7,y:8},{x:6,y:8}];dir=next={x:1,y:0};score=0;gameOver=false;started=true;$('#snakeScore').textContent='0';run=true;"],["if(m&&!(m.x===-dir.x&&m.y===-dir.y))next=m","if(m&&!(m.x===-next.x&&m.y===-next.y))next=m"],["$('#snakePause').onclick=()=>{if(run){stopSnake();run=false;$('#snakeStatus').textContent='Пауза'}else if(s.length){run=true;snakeTimer=setInterval(tick,115);$('#snakeStatus').textContent='Игра идёт'}};","$('#snakePause').onclick=()=>{if(run){stopSnake();run=false;$('#snakeStatus').textContent='Пауза'}else if(started&&!gameOver){run=true;snakeTimer=setInterval(tick,115);$('#snakeStatus').textContent='Игра идёт'}};"],["x.onclick=()=>flagMode?(flags[+x.dataset.mine]=!flags[+x.dataset.mine],draw()):reveal(+x.dataset.mine);","x.onclick=()=>{let i=+x.dataset.mine;if(flagMode){if(!over&&!shown[i]){flags[i]=!flags[i];draw()}}else reveal(i)};"],["function readLocalJSON(key,fallback){try{return JSON.parse(localStorage.getItem(key)||'null')??fallback}catch{return fallback}}","function readLocalJSON(key,fallback){try{const value=JSON.parse(localStorage.getItem(key)||'null');if(value===null)return fallback;if(fallback===null)return value&&typeof value==='object'&&!Array.isArray(value)?value:null;if(Array.isArray(fallback))return Array.isArray(value)?value:fallback;if(fallback&&typeof fallback==='object')return value&&typeof value==='object'&&!Array.isArray(value)?value:fallback;return typeof value===typeof fallback?value:fallback}catch{return fallback}}"]];
+  for (const [before, after] of runtimePatches) {
+    if (!html.includes(before)) throw new Error('Game patch target not found: ' + before.slice(0, 80));
+    html = html.replace(before, after);
+  }
+  const required = ['<!doctype html>', 'const games=[', "id:'ttt'", "id:'2048'", "id:'chess'", "id:'checkers'", "id:'aumiau'"];
+  const missing = required.filter(fragment => !html.includes(fragment));
+  if (missing.length) throw new Error('Game page validation failed: ' + missing.join(', '));
+  const catalogStart = html.indexOf('const games=[');
+  const catalogEnd = html.indexOf('];', catalogStart);
+  const gameCount = (html.slice(catalogStart, catalogEnd).match(/\{id:'[^']+'/g) || []).length;
+  if (gameCount !== 17) throw new Error('Expected 17 games; found ' + gameCount);
+  cachedGamePage = Buffer.from(html, 'utf8');
+  return cachedGamePage;
+}
+
 app.get('/', (req, res) => {
   try {
-    const partsDir = path.join(__dirname, 'public', 'page-data');
-    const parts = fs.readdirSync(partsDir)
-      .filter(name => /^part-\d{2}\.txt$/.test(name))
-      .sort()
-      .map(name => fs.readFileSync(path.join(partsDir, name), 'utf8').trim());
-    const html = zlib.brotliDecompressSync(Buffer.from(parts.join(''), 'base64'));
-    res.set('Cache-Control', 'no-cache').type('html').send(html);
+    res.set('Cache-Control', 'no-cache').type('html').send(loadGamePage());
   } catch (error) {
     console.error('Could not load the game page:', error.message);
     res.status(500).type('text').send('Playroom is temporarily unable to load its main page.');
@@ -83,7 +103,19 @@ function save() {
   fs.writeFileSync(tmp, JSON.stringify(db, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, DB_FILE);
 }
-app.get('/healthz', (req, res) => res.status(200).json({ ok: true, service: 'playroom-plus' }));
+app.get('/healthz', (req, res) => {
+  try {
+    const html = loadGamePage().toString('utf8');
+    const catalogStart = html.indexOf('const games=[');
+    const catalogEnd = html.indexOf('];', catalogStart);
+    const gameCount = (html.slice(catalogStart, catalogEnd).match(/\{id:'[^']+'/g) || []).length;
+    if (gameCount !== 17) throw new Error('Expected 17 games; found ' + gameCount);
+    res.status(200).json({ ok: true, service: 'playroom-plus', pageReady: true, gameCount });
+  } catch (error) {
+    console.error('Health check could not load game page:', error.message);
+    res.status(503).json({ ok: false, pageReady: false });
+  }
+});
 function cleanName(value) {
   return String(value || '').trim().replace(/[<>\u0000-\u001f]/g, '').slice(0, 20);
 }
