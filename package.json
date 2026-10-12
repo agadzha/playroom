@@ -1,0 +1,14 @@
+{
+  "name": "playroom-plus",
+  "version": "3.1.0",
+  "private": true,
+  "description": "Browser game collection with real-time online Tic-Tac-Toe and account support",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  }
+}
