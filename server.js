@@ -39,7 +39,12 @@ app.get('/', (req, res) => {
       .filter(name => /^part-\d{2}\.txt$/.test(name))
       .sort()
       .map(name => fs.readFileSync(path.join(partsDir, name), 'utf8').trim());
-    const html = zlib.brotliDecompressSync(Buffer.from(parts.join(''), 'base64'));
+    let html = zlib.brotliDecompressSync(Buffer.from(parts.join(''), 'base64')).toString('utf8');
+    const runtimePatches = [["let activeFilter='Все',current='';let theme=","let activeFilter='Все',current='',gameGeneration=0;let theme="],["function openGame(id){current=id;","function openGame(id){gameGeneration++;current=id;"],["function ttt(){shell();let board=","function ttt(){const myGeneration=gameGeneration;shell();let board="],["setTimeout(()=>{let empty=board.map((v,i)=>v?null:i).filter(v=>v!==null);let choice;","setTimeout(()=>{if(myGeneration!==gameGeneration||current!=='ttt'||over||mode!=='cpu'||turn!=='O')return;let empty=board.map((v,i)=>v?null:i).filter(v=>v!==null);let choice;"]];
+    for (const [before, after] of runtimePatches) {
+      if (!html.includes(before)) throw new Error('Game patch target not found: ' + before.slice(0, 70));
+      html = html.replace(before, after);
+    }
     res.set('Cache-Control', 'no-cache').type('html').send(html);
   } catch (error) {
     console.error('Could not load the game page:', error.message);
