@@ -323,6 +323,9 @@ io.on('connection', socket => {
     if (room.status === 'playing') {
       return callback && callback({ ok: false, error: 'Эта партия уже началась.' });
     }
+    // A socket can occupy only one room. Validate the destination first so a
+    // failed join does not unexpectedly remove the player from their current game.
+    if (socket.roomCode && socket.roomCode !== code) leaveRoom(socket);
     room.players.push({ id: socket.id, name: socket.user.username, mark: 'O' });
     room.status = 'playing';
     socket.join(code);
@@ -356,6 +359,9 @@ io.on('connection', socket => {
     const room = rooms.get(socket.roomCode);
     if (!room || room.players.length !== 2) {
       return callback && callback({ ok: false, error: 'Нужны два игрока.' });
+    }
+    if (room.status !== 'finished') {
+      return callback && callback({ ok: false, error: 'Сначала закончи текущую партию.' });
     }
     room.board = Array(9).fill('');
     room.turn = 'X';
