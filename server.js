@@ -53,6 +53,44 @@ function loadGamePage() {
     if (!html.includes(before)) throw new Error('Game patch target not found: ' + before.slice(0, 80));
     html = html.replace(before, after);
   }
+
+  // Convert the old account-focused dialog into a compact guest-only online lobby.
+  const modalStart = html.indexOf('<div class="online-backdrop" id="onlineBackdrop"');
+  const socketScript = '<script src="/socket.io/socket.io.js"></script>';
+  const socketScriptAt = html.indexOf(socketScript, modalStart);
+  const onlineScriptStart = html.indexOf('<script>', socketScriptAt + socketScript.length);
+  const onlineScriptEnd = html.indexOf('</script>', onlineScriptStart);
+  if (modalStart < 0 || socketScriptAt < 0 || onlineScriptStart < 0 || onlineScriptEnd < 0) {
+    throw new Error('Could not locate online dialog for guest-mode conversion');
+  }
+  const guestMarkup = String.raw`<div class="online-backdrop" id="onlineBackdrop" aria-modal="true" role="dialog" aria-labelledby="onlineTitle">
+ <section class="online-modal">
+  <div class="online-head"><div><div class="eyebrow">PLAYROOM · ONLINE</div><h2 id="onlineTitle">Играй с друзьями.</h2><div class="online-muted" id="onlineSubtitle">Онлайн-крестики-нолики без регистрации и пароля.</div></div><button class="online-close" id="onlineClose" aria-label="Закрыть">×</button></div>
+  <section class="online-panel">
+   <label for="guestName">Имя игрока</label>
+   <input class="online-input" id="guestName" maxlength="20" autocomplete="nickname" placeholder="Например, Player-2048">
+   <div class="online-notice">Введи любое имя. Аккаунт, пароль и регистрация не нужны.</div>
+   <div class="online-panels">
+    <article class="online-panel"><h3>Создать комнату</h3><p>Создай партию и отправь другу код или ссылку.</p><button class="btn primary" id="onlineCreateRoom">Создать комнату ↗</button></article>
+    <article class="online-panel"><h3>Войти по коду</h3><p>Введи код комнаты, который прислал друг.</p><input class="online-input" id="onlineJoinCode" maxlength="6" placeholder="ABC123" style="text-transform:uppercase;letter-spacing:3px"><div class="online-actions"><button class="btn" id="onlineJoinRoom">Присоединиться</button></div></article>
+   </div>
+   <div class="online-error" id="onlineRoomError" role="status" aria-live="polite"></div>
+   <div id="onlineRoomArea"></div>
+   <div class="online-notice">Сейчас онлайн поддерживает крестики-нолики. Остальные игры работают прямо в браузере, без аккаунта.</div>
+  </section>
+ </section>
+</div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="/guest-online.js"></script>`;
+  html = html.slice(0, modalStart) + guestMarkup + html.slice(onlineScriptEnd + '</script>'.length);
+  html = html.replace('</style>', '.profile-btn,.dashboard{display:none!important}</style>');
+  html = html.replace('Локальные игры + онлайн-аккаунты и матчи', 'Локальные игры + онлайн-матчи без регистрации');
+  html = html.replace('с онлайн-аккаунтами и матчами', 'с онлайн-матчами без регистрации');
+  if (!html.includes('id="guestName"') || html.includes('id="onlineAuthForm"') ||
+      html.includes('Создай аккаунт') || html.includes('id="onlinePassword"')) {
+    throw new Error('Guest-only lobby validation failed');
+  }
+
   const required = ['<!doctype html>', 'const games=[', "id:'ttt'", "id:'2048'", "id:'chess'", "id:'checkers'", "id:'aumiau'"];
   const missing = required.filter(fragment => !html.includes(fragment));
   if (missing.length) throw new Error('Game page validation failed: ' + missing.join(', '));
@@ -77,160 +115,8 @@ app.use(express.static(path.join(__dirname, 'public'), {
   maxAge: process.env.NODE_ENV === 'production' ? '1h' : 0
 }));
 
-// Rate-limit account creation and login attempts per IP and endpoint.
-const requestBuckets = new Map();
-function rateLimit({ windowMs, max, message }) {
-  return (req, res, next) => {
-    const now = Date.now();
-    const key = (req.ip || req.socket.remoteAddress || 'unknown') + '|' + req.path;
-    let bucket = requestBuckets.get(key);
-    if (!bucket || now - bucket.start > windowMs) bucket = { start: now, count: 0 };
-    bucket.count++;
-    requestBuckets.set(key, bucket);
-    if (bucket.count > max) return res.status(429).json({ error: message });
-    next();
-  };
-}
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, bucket] of requestBuckets) {
-    if (now - bucket.start > 60 * 60 * 1000) requestBuckets.delete(key);
-  }
-}, 15 * 60 * 1000).unref();
-
-let db = { users: [], sessions: {}, results: [] };
-try {
-  if (fs.existsSync(DB_FILE)) db = { ...db, ...JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) };
-} catch (error) {
-  console.error('Could not read data store:', error.message);
-}
-function save() {
-  const tmp = DB_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(db, null, 2), { mode: 0o600 });
-  fs.renameSync(tmp, DB_FILE);
-}
-app.get('/healthz', (req, res) => {
-  try {
-    const html = loadGamePage().toString('utf8');
-    const catalogStart = html.indexOf('const games=[');
-    const catalogEnd = html.indexOf('];', catalogStart);
-    const gameCount = (html.slice(catalogStart, catalogEnd).match(/\{id:'[^']+'/g) || []).length;
-    if (gameCount !== 17) throw new Error('Expected 17 games; found ' + gameCount);
-    res.status(200).json({ ok: true, service: 'playroom-plus', pageReady: true, gameCount });
-  } catch (error) {
-    console.error('Health check could not load game page:', error.message);
-    res.status(503).json({ ok: false, pageReady: false });
-  }
-});
-function cleanName(value) {
-  return String(value || '').trim().replace(/[<>\u0000-\u001f]/g, '').slice(0, 20);
-}
-function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
-  return new Promise((resolve, reject) => {
-    crypto.scrypt(password, salt, 64, (error, key) => {
-      if (error) reject(error);
-      else resolve({ salt, hash: key.toString('hex') });
-    });
-  });
-}
-async function verifyPassword(password, user) {
-  const value = await hashPassword(password, user.salt);
-  return crypto.timingSafeEqual(Buffer.from(value.hash, 'hex'), Buffer.from(user.hash, 'hex'));
-}
-function getUser(req) {
-  const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  const username = db.sessions[token];
-  return username ? db.users.find(user => user.username === username) : null;
-}
-function auth(req, res, next) {
-  const user = getUser(req);
-  if (!user) return res.status(401).json({ error: 'Войди в аккаунт, чтобы использовать онлайн-функции.' });
-  req.user = user;
-  next();
-}
-function publicUser(user) {
-  return {
-    username: user.username,
-    wins: user.wins || 0,
-    losses: user.losses || 0,
-    draws: user.draws || 0,
-    createdAt: user.createdAt
-  };
-}
-
-app.post('/api/register', rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 8,
-  message: 'Слишком много попыток регистрации с этого адреса. Попробуй позже.'
-}), async (req, res) => {
-  try {
-    const username = cleanName(req.body.username);
-    const password = String(req.body.password || '');
-    if (!/^[\p{L}\p{N}_-]{3,20}$/u.test(username)) {
-      return res.status(400).json({ error: 'Имя: 3–20 букв, цифр, _ или -.' });
-    }
-    if (password.length < 8 || password.length > 128) {
-      return res.status(400).json({ error: 'Пароль должен быть длиной от 8 до 128 символов.' });
-    }
-    if (db.users.some(user => user.username.toLowerCase() === username.toLowerCase())) {
-      return res.status(409).json({ error: 'Такое имя уже занято.' });
-    }
-    const passwordData = await hashPassword(password);
-    const user = {
-      username,
-      salt: passwordData.salt,
-      hash: passwordData.hash,
-      createdAt: new Date().toISOString(),
-      wins: 0,
-      losses: 0,
-      draws: 0
-    };
-    db.users.push(user);
-    const token = crypto.randomBytes(32).toString('hex');
-    db.sessions[token] = username;
-    save();
-    res.json({ token, user: publicUser(user) });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Не удалось создать аккаунт.' });
-  }
-});
-
-app.post('/api/login', rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 12,
-  message: 'Слишком много попыток входа. Подожди 15 минут и попробуй снова.'
-}), async (req, res) => {
-  try {
-    const username = cleanName(req.body.username);
-    const password = String(req.body.password || '');
-    const user = db.users.find(item => item.username.toLowerCase() === username.toLowerCase());
-    if (!user || !(await verifyPassword(password, user))) {
-      return res.status(401).json({ error: 'Неверное имя или пароль.' });
-    }
-    const token = crypto.randomBytes(32).toString('hex');
-    db.sessions[token] = user.username;
-    save();
-    res.json({ token, user: publicUser(user) });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Ошибка входа.' });
-  }
-});
-app.post('/api/logout', auth, (req, res) => {
-  const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  delete db.sessions[token];
-  save();
-  res.json({ ok: true });
-});
-app.get('/api/me', auth, (req, res) => res.json({ user: publicUser(req.user) }));
-app.get('/api/leaderboard', (req, res) => {
-  res.json(db.users.map(publicUser)
-    .sort((a, b) => b.wins - a.wins || a.losses - b.losses)
-    .slice(0, 20));
-});
-
 const rooms = new Map();
+
 function newRoom(host) {
   let code;
   do {
@@ -273,34 +159,17 @@ function winner(board) {
   }
   return board.every(Boolean) ? 'draw' : null;
 }
-function updateStats(room, result) {
-  if (room.statsSaved) return;
+function updateStats(room) {
+  // Anonymous rooms deliberately do not create accounts or persist player data.
   room.statsSaved = true;
-  if (result === 'draw') {
-    room.players.forEach(player => {
-      const user = db.users.find(item => item.username === player.name);
-      if (user) user.draws = (user.draws || 0) + 1;
-    });
-  } else {
-    const win = room.players.find(player => player.mark === result);
-    const lose = room.players.find(player => player.mark !== result);
-    if (win) {
-      const user = db.users.find(item => item.username === win.name);
-      if (user) user.wins = (user.wins || 0) + 1;
-    }
-    if (lose) {
-      const user = db.users.find(item => item.username === lose.name);
-      if (user) user.losses = (user.losses || 0) + 1;
-    }
-  }
-  save();
 }
 io.use((socket, next) => {
-  const token = socket.handshake.auth && socket.handshake.auth.token;
-  const username = db.sessions[token];
-  const user = username && db.users.find(item => item.username === username);
-  if (!user) return next(new Error('Войди в аккаунт для онлайн-игры.'));
-  socket.user = { username: user.username };
+  const rawName = socket.handshake.auth && socket.handshake.auth.name;
+  const name = String(rawName || '').trim().replace(/[<>\u0000-\u001f]/g, '').slice(0, 20);
+  if (!/^[\p{L}\p{N}_ -]{1,20}$/u.test(name)) {
+    return next(new Error('Введи имя игрока: от 1 до 20 букв, цифр или пробелов.'));
+  }
+  socket.user = { username: name, guest: true };
   next();
 });
 io.on('connection', socket => {
