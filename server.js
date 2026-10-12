@@ -110,6 +110,17 @@ app.get('/', (req, res) => {
     res.status(500).type('text').send('Playroom is temporarily unable to load its main page.');
   }
 });
+app.get('/healthz', (req, res) => {
+  try {
+    const html = loadGamePage().toString('utf8');
+    const count = pageGameCount(html);
+    if (count !== 17) throw new Error('Expected 17 games; found ' + count);
+    res.status(200).json({ ok: true, service: 'playroom-plus', pageReady: true, gameCount: count });
+  } catch (error) {
+    console.error('Health check could not load game page:', error.message);
+    res.status(503).json({ ok: false, pageReady: false });
+  }
+});
 app.use(express.static(path.join(__dirname, 'public'), {
   etag: true,
   maxAge: process.env.NODE_ENV === 'production' ? '1h' : 0
