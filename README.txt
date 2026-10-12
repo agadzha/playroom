@@ -6,10 +6,12 @@ LOCAL PLAY
 3. Open http://localhost:3000.
 
 PUBLIC RELEASE
-Read DEPLOY.md. The project includes render.yaml for a Node.js web service with a persistent data disk. Connect this repository to Render, review the plan/cost, and confirm deployment yourself.
+The repository is connected to Render's Free web-service plan. See DEPLOY.md.
+The free service filesystem is temporary, so account data can be lost on restarts,
+sleep or redeploy. Persistent long-term accounts require a database or paid storage.
 
 ONLINE FEATURES
-- Accounts and password hashes stored server-side.
+- Accounts stored server-side (passwords are stored as cryptographic hashes).
 - Real-time online Tic-Tac-Toe rooms with invite codes/links.
 - Online leaderboard for Tic-Tac-Toe.
 - Local games, themes, favourites and local records.
@@ -18,7 +20,6 @@ ONLINE FEATURES
 LIMITS TO KNOW
 - Only Tic-Tac-Toe is currently multiplayer; other games are local.
 - No email verification or password reset yet.
-- JSON-file storage is suitable for a small friend group, not a large public service.
 - Never publish data.json or secrets.
 
-See DEPLOY.md for full release steps and security notes.
+See DEPLOY.md for more details.
