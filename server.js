@@ -267,11 +267,8 @@ io.use((socket, next) => {
 });
 io.on('connection', socket => {
   socket.on('room:create', (_, callback) => {
-    if (socket.roomCode) {
-      const old = rooms.get(socket.roomCode);
-      if (old && old.players.length === 1) rooms.delete(old.code);
-      socket.leave(socket.roomCode);
-    }
+    // Leave any previous room cleanly before opening another one.
+    if (socket.roomCode) leaveRoom(socket);
     const room = newRoom(socket);
     if (callback) callback({ ok: true, room: snapshot(room) });
     sendRoom(room);
@@ -341,16 +338,21 @@ function leaveRoom(socket) {
   socket.leave(code);
   delete socket.roomCode;
   if (!room) return;
-  const player = room.players.find(item => item.id === socket.id);
   room.players = room.players.filter(item => item.id !== socket.id);
-  if (room.status === 'playing' && player) {
+  if (room.players.length === 0) {
+    rooms.delete(code);
+    return;
+  }
+  // A lone player becomes X in a fresh waiting room, even if the old game had ended.
+  if (room.players.length === 1) {
     room.status = 'waiting';
+    room.players[0].mark = 'X';
     room.board = Array(9).fill('');
     room.turn = 'X';
     room.winner = null;
+    room.statsSaved = false;
   }
-  if (room.players.length === 0) rooms.delete(code);
-  else sendRoom(room);
+  sendRoom(room);
 }
 // Expire abandoned rooms so stale invites do not consume memory forever.
 setInterval(() => {
