@@ -33,6 +33,11 @@ app.use(express.json({ limit: '20kb' }));
 
 // Rebuild the Brotli-compressed game page from its repository-friendly text parts.
 let cachedGamePage = null;
+function pageGameCount(html) {
+  const start = html.indexOf('const games=[');
+  const end = html.indexOf('];', start);
+  return (html.slice(start, end).match(/\{id:'[^']+'/g) || []).length;
+}
 function loadGamePage() {
   if (cachedGamePage) return cachedGamePage;
   const partsDir = path.join(__dirname, 'public', 'page-data');
@@ -394,6 +399,13 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000).unref();
 
+try {
+  const page = loadGamePage().toString('utf8');
+  console.log('Main page preflight passed (' + pageGameCount(page) + ' games).');
+} catch (error) {
+  console.error('Main page preflight failed:', error.message);
+  process.exit(1);
+}
 server.listen(PORT, '0.0.0.0', () => {
   console.log('\nplayroom PLUS running on port ' + PORT + '\nData directory: ' + DATA_DIR + '\n');
 });
