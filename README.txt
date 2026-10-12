@@ -1,4 +1,4 @@
-PLAYROOM PLUS — START HERE
+PLAYROOM — START HERE
 
 LOCAL PLAY
 1. Install Node.js LTS from https://nodejs.org/.
@@ -7,19 +7,18 @@ LOCAL PLAY
 
 PUBLIC RELEASE
 The repository is connected to Render's Free web-service plan. See DEPLOY.md.
-The free service filesystem is temporary, so account data can be lost on restarts,
-sleep or redeploy. Persistent long-term accounts require a database or paid storage.
+The free service can sleep after inactivity, and active online rooms can end
+when the server restarts or redeploys.
 
 ONLINE FEATURES
-- Accounts stored server-side (passwords are stored as cryptographic hashes).
-- Real-time online Tic-Tac-Toe rooms with invite codes/links.
-- Online leaderboard for Tic-Tac-Toe.
-- Local games, themes, favourites and local records.
+- No registration, accounts or passwords.
+- Real-time guest Tic-Tac-Toe rooms with invite codes/links.
+- Local games, themes, favourites and personal records in the browser.
 - /healthz health check for the hosting platform.
 
 LIMITS TO KNOW
 - Only Tic-Tac-Toe is currently multiplayer; other games are local.
-- No email verification or password reset yet.
-- Never publish data.json or secrets.
+- Online rooms and player names are temporary and are not stored as accounts.
+- Never publish .env, secrets or private data.
 
 See DEPLOY.md for more details.
